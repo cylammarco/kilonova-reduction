@@ -1,0 +1,11 @@
+{
+    "base_folder": "~/data_reduction_test",
+    "log_file": "reduction_lt_data.log",
+    "log_level": "INFO",
+    "db_name": "liverpool_telescope.db",
+    "data_table": "data",
+    "reduction_table": "reduction",
+    "raw_data_folder": "raw_data",
+    "reduced_data_folder": "reduced_data",
+    "slack_config": "slack_cfg.yaml"
+}
