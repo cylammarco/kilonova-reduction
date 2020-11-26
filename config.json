@@ -1,12 +1,18 @@
 {
-    "base_folder": "~/data_reduction_test",
-    "log_file": "grab_lt_data.log",
-    "log_level": "INFO",
-    "db_name": "liverpool_telescope.db",
-    "obslog_table": "obslog",
-    "data_table": "data",
-    "raw_data_folder": "raw_data",
-    "time_start": 19,
-    "time_end": 7,
-    "login_config": "login_cfg.yaml"
+  "base_folder": "~/data_reduction_test",
+  "data_log_file": "grab_lt_data.log",
+  "data_log_level": "INFO",
+  "reduction_log_file": "reduce_lt_data.log",
+  "reduction_log_level": "INFO",
+  "propid": [ "SPRATStand" ],
+  "db_name": "liverpool_telescope.db",
+  "obslog_table": "obslog",
+  "data_table": "data",
+  "reduction_table": "reduction",
+  "raw_data_folder": "raw_data",
+  "reduced_data_folder": "reduced_data",
+  "time_start": 19,
+  "time_end": 7,
+  "login_config": [ "login_cfg.json" ],
+  "slack_config": "slack_cfg.json"
 }

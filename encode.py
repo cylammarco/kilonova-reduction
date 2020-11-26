@@ -1,32 +1,30 @@
 import base64
+import os
+from cryptography.fernet import Fernet
 
-def encode(key, string):
+def encode(password, string):
 
-    encoded_chars = []
+    if len(password) > 32:
+        raise ValueError('Password has to be shorter than 32 charaters.')
+    len_diff = 32 - len(password)
+    password += "0" * len_diff
 
-    for i in range(len(string)):
+    key = base64.urlsafe_b64encode(bytes(password, 'utf-8'))
+    Fkey = Fernet(key)
+    token = Fkey.encrypt(bytes(string, 'utf-8'))
 
-        key_c = key[i % len(key)]
-        encoded_c = chr(ord(string[i]) + ord(key_c) % 128)
-        encoded_chars.append(encoded_c)
+    return token
 
-    encoded_string = "".join(encoded_chars)
-    arr2 = bytes(encoded_string, 'utf-8')
+def decode(password, token):
 
-    return base64.urlsafe_b64encode(arr2)
+    if len(password) > 32:
+        raise ValueError('Password has to be shorter than 32 charaters.')
+    len_diff = 32 - len(password)
+    password += "0" * len_diff
+    
+    key = base64.urlsafe_b64encode(bytes(password, 'utf-8'))
+    Fkey = Fernet(key)
+    message = Fkey.decrypt(bytes(token, 'utf-8'))
 
-def decode(key, string):
+    return message
 
-    encoded_chars = []
-    string = base64.urlsafe_b64decode(string)
-    string = string.decode('utf-8')
-
-    for i in range(len(string)):
-
-        key_c = key[i % len(key)]
-        encoded_c = chr(ord(string[i]) - ord(key_c) % 128)
-        encoded_chars.append(encoded_c)
-
-    encoded_string = "".join(encoded_chars)
-
-    return encoded_string
