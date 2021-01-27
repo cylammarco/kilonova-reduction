@@ -181,10 +181,9 @@ while 1:
                                     light_name + '_apextract'),
                                 save_iframe=True)
 
-            twodspec.add_arc(arc_file_path, stype='science')
+            twodspec.add_arc(arc_file_path)
 
             twodspec.extract_arc_spec(display=False,
-                                      stype='science',
                                       filename=os.path.join(
                                           reduced_data_folder_path, obsnight,
                                           light_name + '_arc_spec'),
@@ -243,7 +242,7 @@ while 1:
                                            np.log10(sensitivity),
                                            fill_value='extrapolate')
 
-            onedspec.add_sensitivity_itp(sensitivity_itp, stype='science')
+            onedspec.add_sensitivity_func(sensitivity_itp)
 
             onedspec.apply_flux_calibration(stype='science')
 
