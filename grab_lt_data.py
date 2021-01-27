@@ -201,9 +201,6 @@ while 1:
     month_m8 = time_now_m8.month
     day_m8 = time_now_m8.day
 
-    day = '24'
-    day_m8 = '24'
-
     something_added = False
 
     # If the current time is between 18 hours and 7 hours, check if new data
@@ -214,8 +211,10 @@ while 1:
 
         for nth_prop, propid in enumerate(propid_list):
 
-            ltobslog_filename = str(year_m8) + str(month_m8) + str(day_m8)
-            obs_date = str(year) + '-' + str(month) + '-' + str(day)
+            ltobslog_filename = str(year_m8) + str(month_m8).zfill(2) + str(
+                day_m8).zfill(2)
+            obs_date = str(year) + '-' + str(month).zfill(2) + '-' + str(
+                day).zfill(2)
 
             url = uri + '/{}/{}/{}.log'.format(propid, ltobslog_filename,
                                                ltobslog_filename)
@@ -236,18 +235,16 @@ while 1:
 
                 # Create folders to hold raw and reduced data if not exist
                 if not os.path.exists(
-                        os.path.join(raw_data_folder_path,
-                                        ltobslog_filename)):
+                        os.path.join(raw_data_folder_path, ltobslog_filename)):
                     mkdir_recursive(
-                        os.path.join(raw_data_folder_path,
-                                        ltobslog_filename))
+                        os.path.join(raw_data_folder_path, ltobslog_filename))
 
                 if not os.path.exists(
                         os.path.join(reduced_data_folder_path,
-                                    ltobslog_filename)):
+                                     ltobslog_filename)):
                     mkdir_recursive(
                         os.path.join(reduced_data_folder_path,
-                                    ltobslog_filename))
+                                     ltobslog_filename))
 
                 for row in obslog:
 

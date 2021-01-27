@@ -181,16 +181,17 @@ while 1:
                                     light_name + '_apextract'),
                                 save_iframe=True)
 
-            onedspec = spectral_reduction.OneDSpec()
-            onedspec.from_twodspec(twodspec, stype='science')
-            onedspec.add_arc(arc_file_path, stype='science')
+            twodspec.add_arc(arc_file_path, stype='science')
 
-            onedspec.extract_arc_spec(display=False,
+            twodspec.extract_arc_spec(display=False,
                                       stype='science',
                                       filename=os.path.join(
                                           reduced_data_folder_path, obsnight,
                                           light_name + '_arc_spec'),
                                       save_iframe=True)
+
+            onedspec = spectral_reduction.OneDSpec()
+            onedspec.from_twodspec(twodspec, stype='science')
 
             # Find the peaks of the arc
             onedspec.find_arc_lines(display=False,
