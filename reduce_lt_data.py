@@ -5,11 +5,10 @@ import logging
 import json
 import numpy as np
 import os
-import requests
 import sqlite3
 import time
 from scipy import interpolate as itp
-from datetime import datetime, timedelta, tzinfo
+from datetime import datetime
 from os.path import expanduser
 
 from encode import decode
@@ -67,6 +66,7 @@ if not os.path.isabs(base_folder):
     except Exception as e:
         print('This script should not be run interactively for deployment. '
               'log level is set to DEBUG.')
+        print(e)
         log_level = 'DEBUG'
         logging.basicConfig(level=logging.DEBUG)
         base_folder = os.path.join(os.path.abspath(os.getcwd()), base_folder)
@@ -131,8 +131,8 @@ while 1:
             "SELECT * FROM {} LIMIT 1;".format(reduction_table)).fetchall())
 
     # Check for data that is not reduced
-    check_if_reduced_query = 'SELECT * FROM {} WHERE "output" = "UNKNOWN";'.format(
-        reduction_table)
+    check_if_reduced_query =\
+        'SELECT * FROM {} WHERE "output" = "UNKNOWN";'.format(reduction_table)
     logging.info(check_if_reduced_query)
     list_to_reduce = db_connector.execute(check_if_reduced_query).fetchall()
     logging.info(list_to_reduce)
@@ -265,16 +265,29 @@ while 1:
                                overwrite=True)
 
             # [1] Update the DB
-            update_query = 'UPDATE "{}" SET "sensitivity" = "{}", "output" = "{}" WHERE "filename" = "{}";'.format(reduction_table, row[0], os.path.join(reduced_data_folder_path, obsnight, light_name + '_reduced'), row[0])
+            update_query = 'UPDATE "{}" SET "sensitivity" = "{}", "output" = \
+                "{}" WHERE "filename" = "{}";'.format(
+                reduction_table, row[0],
+                os.path.join(reduced_data_folder_path, obsnight,
+                             light_name + '_reduced'), row[0])
             logging.info(update_query)
 
             # [2] Post message to Slack
-            post_msg_res = post_message_to_slack(webhook_url, "{} is reduced and is now available at {}.".format(row[0], os.path.join(reduced_data_folder_path, obsnight)))
+            post_msg_res = post_message_to_slack(
+                webhook_url,
+                "{} is reduced and is now available at {}.".format(
+                    row[0], os.path.join(reduced_data_folder_path, obsnight)))
             logging.info(post_msg_res)
 
             # [3 + 4] Post images to Slack
-            post_file_res = post_file_to_slack(slack_token, os.path.join(reduced_data_folder_path, obsnight, light_name + '_reduced_0.png'))
-            post_file_res = post_file_to_slack(slack_token, os.path.join(reduced_data_folder_path, obsnight, light_name + '_reduced_0.html'))
+            post_file_res = post_file_to_slack(
+                slack_token,
+                os.path.join(reduced_data_folder_path, obsnight,
+                             light_name + '_reduced_0.png'))
+            post_file_res = post_file_to_slack(
+                slack_token,
+                os.path.join(reduced_data_folder_path, obsnight,
+                             light_name + '_reduced_0.html'))
             logging.info(post_file_res)
 
             # Commit changes if all 4 actions are successful
