@@ -134,3 +134,4 @@ dmypy.json
 
 # nohup log
 nohup*
+test/
