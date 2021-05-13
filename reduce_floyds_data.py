@@ -1,17 +1,12 @@
 from astropy.io import fits
 from aspired import spectral_reduction
-import getpass
-import logging
-import json
+from matplotlib import pyplot as plt
+from scipy.optimize import minimize
+from spectres import spectres
+from statsmodels.nonparametric.smoothers_lowess import lowess
 import numpy as np
-import os
-import sqlite3
-import time
-from scipy import interpolate as itp
-from datetime import datetime
-from os.path import expanduser
-from os.path import splitext
 import sys
+
 
 def extract_floyds(light_fits,
                    flat_fits,
@@ -26,10 +21,10 @@ def extract_floyds(light_fits,
                                       spatial_mask=red_spatial_mask,
                                       spec_mask=red_spec_mask,
                                       cosmicray=True,
-                                      sigclip=2.,
+                                      sigclip=3.,
                                       readnoise=3.5,
                                       gain=2.3,
-                                      log_level='INFO',
+                                      log_level='WARNING',
                                       log_file_name=None)
 
     blue = spectral_reduction.TwoDSpec(light_data,
@@ -37,10 +32,10 @@ def extract_floyds(light_fits,
                                        spatial_mask=blue_spatial_mask,
                                        spec_mask=blue_spec_mask,
                                        cosmicray=True,
-                                       sigclip=2.,
+                                       sigclip=3.,
                                        readnoise=3.5,
                                        gain=2.3,
-                                       log_level='INFO',
+                                       log_level='WARNING',
                                        log_file_name=None)
 
     # Add the arcs before rectifying the image, which will apply the
@@ -57,7 +52,10 @@ def extract_floyds(light_fits,
                  shift_tol=50,
                  fit_deg=5,
                  display=False)
-    red.compute_rectification(upsample_factor=10, coeff=coeff_red)
+    red.compute_rectification(upsample_factor=10,
+                              coeff=coeff_red,
+                              display=True,
+                              save_iframe=True)
     red.apply_rectification()
     # Need to store the traces for fringe correction before overwriting them
     # with the new traces
@@ -66,7 +64,7 @@ def extract_floyds(light_fits,
 
     # Get the trace again for the rectified image and then extract
     red.ap_trace(nspec=1, trace_width=20, fit_deg=3, display=False)
-    red.ap_extract(apwidth=10, spec_id=0, display=False)
+    red.ap_extract(apwidth=15, spec_id=0, display=True)
 
     # Do the same with the blue
     blue.ap_trace(nspec=1,
@@ -76,9 +74,10 @@ def extract_floyds(light_fits,
                   fit_deg=5,
                   display=False)
     blue.compute_rectification(upsample_factor=10,
-                               bin_size=7,
-                               n_bin=[3, 1],
-                               coeff=coeff_blue)
+                               n_bin=[5, 2],
+                               coeff=coeff_blue,
+                               display=True,
+                               save_iframe=True)
     blue.apply_rectification()
 
     blue.ap_trace(nspec=1,
@@ -86,10 +85,10 @@ def extract_floyds(light_fits,
                   trace_width=20,
                   fit_deg=3,
                   display=False)
-    blue.ap_extract(apwidth=10, display=False)
+    blue.ap_extract(apwidth=15, display=True)
 
-    red.extract_arc_spec(spec_width=15, display=False)
-    blue.extract_arc_spec(spec_width=15, display=False)
+    red.extract_arc_spec(spec_width=30, display=False)
+    blue.extract_arc_spec(spec_width=30, display=False)
 
     # Get the blue and red traces for fringe removal
     trace_red_rectified = red.spectrum_list[0].trace
@@ -106,11 +105,12 @@ def extract_floyds(light_fits,
                                        cosmicray=True,
                                        readnoise=3.5,
                                        gain=2.3,
-                                       log_level='INFO',
+                                       log_level='WARNING',
                                        log_file_name=None)
 
     # Force extraction from the flat for fringe correction
     flat.add_trace(trace_red, trace_sigma_red)
+    # This line will throw a warning about "Arc frame not available"
     flat.compute_rectification(coeff=coeff_red)
     flat.apply_rectification()
     flat.add_trace(trace_red_rectified, trace_sigma_red_rectified)
@@ -119,147 +119,244 @@ def extract_floyds(light_fits,
     return red, blue, flat
 
 
-def calibrate_red(science, standard, standard_name):
+def match_fringe_amplitude(factor, red_normalised, fringe_normalised):
+    diff = red_normalised[700:1600] - fringe_normalised[700:1600] * factor
+    return np.nanstd(diff)
+
+
+def calibrate_red(science,
+                  standard,
+                  standard_name,
+                  science_flat=None,
+                  standard_flat=None):
     #
     # Start handling 1D spectra here
     #
-    # Need to add fringe subtraction here
-    red = spectral_reduction.OneDSpec(log_level='INFO', log_file_name=None)
+    red_onedspec = spectral_reduction.OneDSpec(log_level='WARNING',
+                                               log_file_name=None)
+
+
+    # Finge subtraction
+    if science_flat is not None:
+
+        science_fringe_count = science_flat.spectrum_list[0].count
+
+        science_fringe_continuum = lowess(science_fringe_count,
+                                          np.arange(len(science_fringe_count)),
+                                          frac=0.04,
+                                          return_sorted=False)
+        science_fringe_normalised = science_fringe_count - science_fringe_continuum
+        science_fringe_normalised /= np.nansum(science_fringe_normalised)
+
+        science_red_count = science.spectrum_list[0].count
+        science_red_continuum = lowess(science_red_count,
+                                       np.arange(len(science_red_count)),
+                                       frac=0.04,
+                                       return_sorted=False)
+        science_red_continuum_subtracted = science_red_count - science_red_continuum
+
+        #science_sed_correction = science_fringe_continuum / science_red_continuum
+        #science_sed_correction /= np.nanmean(science_sed_correction)
+
+        science_factor = minimize(
+            match_fringe_amplitude,
+            10.0,
+            args=(science_red_continuum_subtracted,
+                  science_fringe_normalised)).x
+
+        science_fringe_correction = science_fringe_normalised * science_factor
+
+        # Apply the flat correction
+        science.spectrum_list[0].count -= science_fringe_correction
+
+    if (science_flat is not None) & (standard_flat is None):
+
+        standard_flat = science_flat
+
+    if standard_flat is not None:
+
+        standard_fringe_count = standard_flat.spectrum_list[0].count
+
+        standard_fringe_continuum = lowess(standard_fringe_count,
+                                           np.arange(
+                                               len(standard_fringe_count)),
+                                           frac=0.04,
+                                           return_sorted=False)
+        standard_fringe_normalised = standard_fringe_count - standard_fringe_continuum
+        standard_fringe_normalised /= np.nansum(standard_fringe_normalised)
+
+        standard_red_count = standard.spectrum_list[0].count
+        standard_red_continuum = lowess(standard_red_count,
+                                        np.arange(len(standard_red_count)),
+                                        frac=0.04,
+                                        return_sorted=False)
+        standard_red_continuum_subtracted = standard_red_count - standard_red_continuum
+
+        #standard_sed_correction = standard_fringe_continuum / standard_red_continuum
+        #standard_sed_correction /= np.nanmean(standard_sed_correction)
+
+        standard_factor = minimize(
+            match_fringe_amplitude,
+            10.0,
+            args=(standard_red_continuum_subtracted,
+                  standard_fringe_normalised)).x
+
+        standard_fringe_correction = standard_fringe_normalised * standard_factor
+
+        # Apply the flat correction
+        standard.spectrum_list[0].count -= standard_fringe_correction
+        print(standard.spectrum_list[0].count)
+        print(standard_fringe_correction)
+        print(standard.spectrum_list[0].count)
 
     # Red spectrum first
-    red.from_twodspec(standard, stype='standard')
-    red.from_twodspec(science, stype='science')
+    red_onedspec.from_twodspec(standard, stype='standard')
+    red_onedspec.from_twodspec(science, stype='science')
 
     # Find the peaks of the arc
-    red.find_arc_lines(display=False, prominence=100, stype='science')
-    red.find_arc_lines(display=False, prominence=20, stype='standard')
+    red_onedspec.find_arc_lines(display=False,
+                                prominence=0.25,
+                                top_n_peaks=25,
+                                stype='science')
+    red_onedspec.find_arc_lines(display=False,
+                                prominence=0.25,
+                                top_n_peaks=25,
+                                stype='standard')
 
     # Configure the wavelength calibrator
-    red.initialise_calibrator(stype='science+standard')
+    red_onedspec.initialise_calibrator(stype='science+standard')
 
-    red.add_user_atlas(elements=element_Hg_red,
-                       wavelengths=atlas_Hg_red,
-                       stype='science+standard')
-    red.add_user_atlas(elements=element_Ar_red,
-                       wavelengths=atlas_Ar_red,
-                       stype='science+standard')
+    red_onedspec.add_user_atlas(
+        elements=element_Hg_red,
+        wavelengths=atlas_Hg_red,
+        pressure=float(science.header['REFPRES']) * 100,
+        temperature=float(science.header['REFTEMP'] + 273),
+        relative_humidity=float(science.header['REFHUMID']),
+        stype='science+standard')
+    red_onedspec.add_user_atlas(
+        elements=element_Ar_red,
+        wavelengths=atlas_Ar_red,
+        pressure=float(standard.header['REFPRES']) * 100,
+        temperature=float(standard.header['REFTEMP'] + 273),
+        relative_humidity=float(standard.header['REFHUMID']),
+        stype='science+standard')
 
-    red.set_hough_properties(num_slopes=2000,
-                             xbins=100,
-                             ybins=100,
-                             min_wavelength=4500,
-                             max_wavelength=10500,
-                             stype='science+standard')
-    red.set_ransac_properties(stype='science+standard')
-    red.do_hough_transform(stype='science+standard')
+    red_onedspec.set_hough_properties(num_slopes=2000,
+                                      xbins=100,
+                                      ybins=100,
+                                      min_wavelength=4500,
+                                      max_wavelength=10500,
+                                      stype='science+standard')
+    red_onedspec.set_ransac_properties(stype='science+standard')
+    red_onedspec.do_hough_transform(stype='science+standard')
 
     # Solve for the pixel-to-wavelength solution
-    red.fit(max_tries=2000, stype='science+standard', display=False, savefig=True)
+    red_onedspec.fit(max_tries=1000,
+                     stype='science+standard',
+                     display=True,
+                     savefig=True)
 
     # Apply the wavelength calibration and display it
-    red.apply_wavelength_calibration(wave_start=5000,
-                                     wave_end=11000,
-                                     wave_bin=1,
-                                     stype='science+standard')
+    red_onedspec.apply_wavelength_calibration(wave_start=4750,
+                                              wave_end=11000,
+                                              wave_bin=1,
+                                              stype='science+standard')
 
-    red.load_standard(standard_name)
-    red.compute_sensitivity()
-    red.apply_flux_calibration()
-    '''
+    red_onedspec.load_standard(standard_name)
+    red_onedspec.compute_sensitivity(frac=0.25)
+    red_onedspec.inspect_sensitivity()
+    red_onedspec.apply_flux_calibration()
 
-    L745_fringe_count = L745_twodspec_flat.spectrum_list[0].count
-
-    L745_fringe_continuum = lowess(L745_fringe_count,
-                                np.arange(len(L745_fringe_count)),
-                                frac=0.04,
-                                return_sorted=False)
-    L745_fringe_normalised = L745_fringe_count / L745_fringe_continuum
-
-    L745_red_count = L745_twodspec_red.spectrum_list[0].count
-    L745_red_continuum = lowess(L745_red_count,
-                                np.arange(len(L745_red_count)),
-                                frac=0.04,
-                                return_sorted=False)
-    L745_red_normalised = L745_red_count / L745_red_continuum
-    L745_sed_correction = L745_fringe_continuum / L745_red_continuum
-    L745_sed_correction /= np.nanmean(L745_sed_correction)
-
-    L745_factor = (np.nanpercentile(L745_fringe_normalised[1000:1800], 95)) / (
-        np.nanpercentile(L745_red_normalised[1000:1800], 5))
-    L745_factor_mean = np.nanmean(L745_factor)
-
-    L745_fringe_correction =\
-        L745_fringe_normalised / L745_factor_mean *\
-            L745_red_continuum * L745_sed_correction
-
-    # Apply the flat correction
-    L745_twodspec_red.spectrum_list[0].count -= L745_fringe_correction
-
-    '''
-
-    return red
+    return red_onedspec
 
 
 def calibrate_blue(science, standard, standard_name):
     # Blue spectrum here
-    blue = spectral_reduction.OneDSpec(log_level='INFO', log_file_name=None)
+    blue_onedspec = spectral_reduction.OneDSpec(log_level='WARNING',
+                                                log_file_name=None)
 
-    blue.from_twodspec(standard, stype='standard')
-    blue.from_twodspec(science, stype='science')
+    blue_onedspec.from_twodspec(standard, stype='standard')
+    blue_onedspec.from_twodspec(science, stype='science')
 
-    blue.find_arc_lines(prominence=10, display=False, stype='science')
-    blue.find_arc_lines(prominence=5, display=False, stype='standard')
+    blue_onedspec.find_arc_lines(prominence=0.25,
+                                 top_n_peaks=10,
+                                 display=True,
+                                 stype='science')
+    blue_onedspec.find_arc_lines(prominence=0.25,
+                                 top_n_peaks=10,
+                                 display=True,
+                                 stype='standard')
 
-    blue.initialise_calibrator(stype='science+standard')
+    blue_onedspec.initialise_calibrator(stype='science+standard')
 
-    blue.add_user_atlas(elements=element_Hg_blue,
-                        wavelengths=atlas_Hg_blue,
-                        stype='science+standard')
-    blue.add_user_atlas(elements=element_Zn_blue,
-                        wavelengths=atlas_Zn_blue,
-                        stype='science+standard')
+    blue_onedspec.add_user_atlas(
+        elements=element_Hg_blue,
+        wavelengths=atlas_Hg_blue,
+        pressure=float(science.header['REFPRES']) * 100,
+        temperature=float(science.header['REFTEMP'] + 273),
+        relative_humidity=float(science.header['REFHUMID']),
+        stype='science+standard')
+    blue_onedspec.add_user_atlas(
+        elements=element_Ar_blue,
+        wavelengths=atlas_Ar_blue,
+        pressure=float(standard.header['REFPRES']) * 100,
+        temperature=float(standard.header['REFTEMP'] + 273),
+        relative_humidity=float(standard.header['REFHUMID']),
+        stype='science+standard')
 
-    blue.set_hough_properties(num_slopes=2000,
-                              xbins=200,
-                              ybins=200,
-                              min_wavelength=3000,
-                              max_wavelength=6000,
-                              stype='science+standard')
-    blue.set_ransac_properties(filter_close=True, stype='science+standard')
-    blue.do_hough_transform(stype='science+standard')
+    blue_onedspec.set_hough_properties(num_slopes=2000,
+                                       xbins=100,
+                                       ybins=100,
+                                       min_wavelength=3000,
+                                       max_wavelength=6000,
+                                       stype='science+standard')
+    blue_onedspec.set_ransac_properties(filter_close=True,
+                                        sample_size=3,
+                                        top_n_candidate=4,
+                                        stype='science+standard')
+    blue_onedspec.do_hough_transform(stype='science+standard')
 
     # Solve for the pixel-to-wavelength solution
-    blue.fit(max_tries=1000, stype='science+standard', display=False, savefig=True)
+    blue_onedspec.fit(max_tries=1000,
+                      stype='science+standard',
+                      display=True,
+                      savefig=True)
 
     # Apply the wavelength calibration and display it
-    blue.apply_wavelength_calibration(wave_start=3000,
-                                      wave_end=5800,
-                                      wave_bin=1,
-                                      stype='science+standard')
+    blue_onedspec.apply_wavelength_calibration(wave_start=3300,
+                                               wave_end=6000,
+                                               wave_bin=1,
+                                               stype='science+standard')
 
-    blue.load_standard(standard_name)
-    blue.compute_sensitivity()
-    blue.apply_flux_calibration()
+    blue_onedspec.load_standard(standard_name)
+    blue_onedspec.compute_sensitivity(smooth=True,
+                                      slength=15,
+                                      use_lowess=False)
+    blue_onedspec.inspect_sensitivity()
+    blue_onedspec.apply_flux_calibration()
 
-    return blue
+    return blue_onedspec
 
 
 # Line list
-atlas_Hg_red = [5460.7348, 5769.5982, 5790.6630]
+atlas_Hg_red = [5460.7348]
 atlas_Ar_red = [
     6965.4307, 7067.2175, 7147.0416, 7272.9359, 7383.9805, 7503.8691,
     7635.1056, 7723.7599, 7948.1764, 8014.7857, 8115.3108, 8264.5225,
-    8424.6475, 8521.4422, 9122.9674, 9224.4992, 9657.7863
+    8424.6475, 8521.4422, 8667.945, 9122.9674, 9224.4992, 9354.220, 9657.7863,
+    9784.503, 10470.054
 ]
 element_Hg_red = ['Hg'] * len(atlas_Hg_red)
 element_Ar_red = ['Ar'] * len(atlas_Ar_red)
 
+atlas_Ar_blue = [4158.590, 4200.674, 4300.101]
 atlas_Hg_blue = [
-    3650.153, 4046.563, 4077.8314, 4358.328, 4916.068, 5460.7348, 5769.5982
+    3650.153, 4046.563, 4077.8314, 4358.328, 5460.7348, 5769.598, 5790.663
 ]
-atlas_Zn_blue = [4078.14, 4298.3249, 4722.15, 4810.53, 5181.9819]
+#atlas_Zn_blue = [4680.14, 4722.15, 4810.53]
+element_Ar_blue = ['Ar'] * len(atlas_Ar_blue)
 element_Hg_blue = ['Hg'] * len(atlas_Hg_blue)
-element_Zn_blue = ['Zn'] * len(atlas_Zn_blue)
+#element_Zn_blue = ['Zn'] * len(atlas_Zn_blue)
 
 # Set the frame
 red_spatial_mask = np.arange(0, 330)
@@ -274,7 +371,7 @@ frametype = np.array(filelist[:, 1]).astype(str)
 filename = np.array(filelist[:, 2]).astype(str)
 
 #
-# Standard frame here
+# Standard fits here (NOT just an array, need the )
 #
 standard_light_fits = fits.open(filename[(obstype == 'standard')
                                          & (frametype == 'light')][0])[1]
@@ -284,8 +381,8 @@ standard_arc_fits = fits.open(filename[(obstype == 'standard')
                                        & (frametype == 'arc')][0])[1]
 standard_name = standard_light_fits.header['OBJECT']
 
-standard_red, standard_blue, standard_flat =\
-    extract_floyds(standard_light_fits, standard_flat_fits, standard_arc_fits)
+standard_red, standard_blue, standard_flat = extract_floyds(
+    standard_light_fits, standard_flat_fits, standard_arc_fits)
 
 #
 # Science frame here
@@ -296,48 +393,141 @@ science_flat_fits = fits.open(filename[(obstype == 'science')
                                        & (frametype == 'flat')][0])[1]
 science_arc_fits = fits.open(filename[(obstype == 'science')
                                       & (frametype == 'arc')][0])[1]
+science_name = science_light_fits.header['OBJECT']
 
-science_red, science_blue, science_flat =\
-    extract_floyds(science_light_fits, science_flat_fits, science_arc_fits,
-        coeff_red=standard_red.rec_coeff,
-        coeff_blue=standard_blue.rec_coeff)
+science_red, science_blue, science_flat = extract_floyds(
+    science_light_fits, science_flat_fits, science_arc_fits)
 
 onedspec_blue = calibrate_blue(science_blue, standard_blue, standard_name)
-onedspec_red = calibrate_red(science_red, standard_red, standard_name)
+onedspec_red = calibrate_red(science_red, standard_red, standard_name,
+                             science_flat, standard_flat)
 
 # Inspect
 onedspec_blue.inspect_reduced_spectrum(
     wave_min=3000,
     wave_max=6000,
     stype='science',
-    display=False,
+    display=True,
     save_iframe=True,
-    filename=splitext(filename[(obstype == 'science')
-                      & (frametype == 'light')][0])[0] + '_blue')
+    filename=filename[(obstype == 'science')
+                      & (frametype == 'light')][0].split('.')[0] + '_blue')
 
 onedspec_red.inspect_reduced_spectrum(
     wave_min=5000,
     wave_max=11000,
     stype='science',
-    display=False,
+    display=True,
     save_iframe=True,
-    filename=splitext(filename[(obstype == 'science')
-                      & (frametype == 'light')][0])[0] + '_red')
+    filename=filename[(obstype == 'science')
+                      & (frametype == 'light')][0].split('.')[0] + '_red')
 
 onedspec_blue.inspect_reduced_spectrum(
     wave_min=3000,
     wave_max=6000,
     stype='standard',
-    display=False,
+    display=True,
     save_iframe=True,
-    filename=splitext(filename[(obstype == 'standard')
-                      & (frametype == 'light')][0])[0] + '_blue')
+    filename=filename[(obstype == 'standard')
+                      & (frametype == 'light')][0].split('.')[0] + '_blue')
 
 onedspec_red.inspect_reduced_spectrum(
     wave_min=5000,
     wave_max=11000,
     stype='standard',
-    display=False,
+    display=True,
     save_iframe=True,
-    filename=splitext(filename[(obstype == 'standard')
-                      & (frametype == 'light')][0])[0] + '_red')
+    filename=filename[(obstype == 'standard')
+                      & (frametype == 'light')][0].split('.')[0] + '_red')
+
+wave_red = onedspec_red.science_spectrum_list[0].wave_resampled
+wave_blue = onedspec_blue.science_spectrum_list[0].wave_resampled
+
+flux_red = onedspec_red.science_spectrum_list[0].flux_resampled
+flux_blue = onedspec_blue.science_spectrum_list[0].flux_resampled
+
+flux_red_err = onedspec_red.science_spectrum_list[0].flux_err_resampled
+flux_blue_err = onedspec_blue.science_spectrum_list[0].flux_err_resampled
+
+# trim the last ~100A from the blue and the first ~100A from the red
+# in the combined spectrum
+red_limit = 5200
+blue_limit = 5800
+
+blue_mask = (wave_blue >= red_limit) & (wave_blue <= blue_limit)
+red_mask = (wave_red >= red_limit) & (wave_red <= blue_limit)
+
+# resample the red to match blue resolution
+flux_red_resampled, flux_red_resampled_err = spectres(wave_blue[blue_mask],
+                                                      wave_red[red_mask],
+                                                      flux_red[red_mask],
+                                                      flux_red_err[red_mask])
+
+flux_weighted_combine = (flux_red_resampled / flux_red_resampled_err +
+                         flux_blue[blue_mask] / flux_blue_err[blue_mask]) / (
+                             1 / flux_red_resampled_err +
+                             1 / flux_blue_err[blue_mask])
+
+flux_combined = np.concatenate(
+    (flux_blue[wave_blue < red_limit], flux_weighted_combine,
+     flux_red[wave_red > blue_limit]))
+wave_combined = np.concatenate(
+    (wave_blue[wave_blue < blue_limit], wave_red[wave_red >= blue_limit]))
+
+
+plt.figure(1, figsize=(16, 8))
+plt.clf()
+plt.plot(wave_blue, flux_blue, color='blue', label='Blue arm (ASPIRED)')
+plt.plot(wave_red, flux_red, color='red', label='Red arm (ASPIRED)')
+plt.plot(wave_combined, flux_combined, color='black', label='Combined')
+plt.xlim(min(wave_blue), max(wave_red))
+plt.ylim(0, max(flux_combined))
+plt.xlabel('Wavelength / A')
+plt.ylabel('Flux / (erg / s / cm / cm / A)')
+plt.legend()
+plt.grid()
+plt.tight_layout()
+plt.title(science_name)
+plt.show()
+
+'''
+science_red
+science_flat
+
+fringe_count = science_flat.spectrum_list[0].count
+
+fringe_continuum = lowess(fringe_count,
+                          np.arange(len(fringe_count)),
+                          frac=0.04,
+                          return_sorted=False)
+fringe_normalised = fringe_count / fringe_continuum
+
+red_count = science_red.spectrum_list[0].count
+red_continuum = lowess(red_count,
+                       np.arange(len(red_count)),
+                       frac=0.04,
+                       return_sorted=False)
+red_normalised = red_count / red_continuum
+#sed_correction = fringe_continuum / red_continuum
+#sed_correction /= np.nanmean(sed_correction)
+
+
+def match_fringe_amplitude(factor, red_normalised, fringe_normalised):
+    diff = red_normalised[700:1800] - fringe_normalised[700:1800] * factor
+    return np.nanstd(diff)
+
+
+factor = minimize(match_fringe_amplitude,
+                  1.0,
+                  args=(red_normalised, fringe_normalised)).x
+
+fringe_correction =\
+    fringe_normalised / factor * red_continuum
+
+# Apply the flat correction
+count_defringed = science_red.spectrum_list[0].count / fringe_correction
+
+figure(1)
+clf()
+plot(science_red.spectrum_list[0].count)
+plot(count_defringed)
+'''
