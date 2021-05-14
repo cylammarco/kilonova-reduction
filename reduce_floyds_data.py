@@ -119,9 +119,11 @@ def extract_floyds(light_fits,
     return red, blue, flat
 
 
-def match_fringe_amplitude(factor, red_normalised, fringe_normalised):
-    diff = red_normalised[700:1600] - fringe_normalised[700:1600] * factor
-    return np.nanstd(diff)
+def match_fringe_amplitude(coeff, red_continuum_subtracted, fringe_normalised):
+    factor = np.polyval(coeff, np.arange(850, 1600))
+    diff = red_continuum_subtracted[
+        850:1600] - fringe_normalised[850:1600] * factor
+    return np.nansum(diff**2.)
 
 
 def calibrate_red(science,
@@ -135,7 +137,6 @@ def calibrate_red(science,
     red_onedspec = spectral_reduction.OneDSpec(log_level='WARNING',
                                                log_file_name=None)
 
-
     # Finge subtraction
     if science_flat is not None:
 
@@ -143,28 +144,28 @@ def calibrate_red(science,
 
         science_fringe_continuum = lowess(science_fringe_count,
                                           np.arange(len(science_fringe_count)),
-                                          frac=0.04,
+                                          frac=0.02,
                                           return_sorted=False)
         science_fringe_normalised = science_fringe_count - science_fringe_continuum
-        science_fringe_normalised /= np.nansum(science_fringe_normalised)
 
-        science_red_count = science.spectrum_list[0].count
+        science_red_count = science_red.spectrum_list[0].count
         science_red_continuum = lowess(science_red_count,
                                        np.arange(len(science_red_count)),
-                                       frac=0.04,
+                                       frac=0.02,
                                        return_sorted=False)
         science_red_continuum_subtracted = science_red_count - science_red_continuum
 
-        #science_sed_correction = science_fringe_continuum / science_red_continuum
-        #science_sed_correction /= np.nanmean(science_sed_correction)
-
-        science_factor = minimize(
-            match_fringe_amplitude,
-            10.0,
-            args=(science_red_continuum_subtracted,
-                  science_fringe_normalised)).x
-
+        science_coeff = minimize(match_fringe_amplitude, (1, 1),
+                                 args=(science_red_continuum_subtracted,
+                                       science_fringe_normalised),
+                                 method='Nelder-Mead',
+                                 options={
+                                     'maxiter': 10000
+                                 }).x
+        science_factor = np.polyval(science_coeff,
+                                    np.arange(len(science_fringe_normalised)))
         science_fringe_correction = science_fringe_normalised * science_factor
+        science_fringe_correction[:450] = 0.
 
         # Apply the flat correction
         science.spectrum_list[0].count -= science_fringe_correction
@@ -180,34 +181,31 @@ def calibrate_red(science,
         standard_fringe_continuum = lowess(standard_fringe_count,
                                            np.arange(
                                                len(standard_fringe_count)),
-                                           frac=0.04,
+                                           frac=0.02,
                                            return_sorted=False)
         standard_fringe_normalised = standard_fringe_count - standard_fringe_continuum
-        standard_fringe_normalised /= np.nansum(standard_fringe_normalised)
 
-        standard_red_count = standard.spectrum_list[0].count
+        standard_red_count = standard_red.spectrum_list[0].count
         standard_red_continuum = lowess(standard_red_count,
                                         np.arange(len(standard_red_count)),
-                                        frac=0.04,
+                                        frac=0.02,
                                         return_sorted=False)
         standard_red_continuum_subtracted = standard_red_count - standard_red_continuum
 
-        #standard_sed_correction = standard_fringe_continuum / standard_red_continuum
-        #standard_sed_correction /= np.nanmean(standard_sed_correction)
-
-        standard_factor = minimize(
-            match_fringe_amplitude,
-            10.0,
-            args=(standard_red_continuum_subtracted,
-                  standard_fringe_normalised)).x
-
+        standard_coeff = minimize(match_fringe_amplitude, (1, 1),
+                                  args=(standard_red_continuum_subtracted,
+                                        standard_fringe_normalised),
+                                  method='Nelder-Mead',
+                                  options={
+                                      'maxiter': 10000
+                                  }).x
+        standard_factor = np.polyval(
+            standard_coeff, np.arange(len(standard_fringe_normalised)))
         standard_fringe_correction = standard_fringe_normalised * standard_factor
+        standard_fringe_correction[:450] = 0.
 
         # Apply the flat correction
-        standard.spectrum_list[0].count -= standard_fringe_correction
-        print(standard.spectrum_list[0].count)
-        print(standard_fringe_correction)
-        print(standard.spectrum_list[0].count)
+        science.spectrum_list[0].count -= standard_fringe_correction
 
     # Red spectrum first
     red_onedspec.from_twodspec(standard, stype='standard')
@@ -259,7 +257,7 @@ def calibrate_red(science,
     # Apply the wavelength calibration and display it
     red_onedspec.apply_wavelength_calibration(wave_start=4750,
                                               wave_end=11000,
-                                              wave_bin=1,
+                                              wave_bin=2,
                                               stype='science+standard')
 
     red_onedspec.load_standard(standard_name)
@@ -323,9 +321,9 @@ def calibrate_blue(science, standard, standard_name):
                       savefig=True)
 
     # Apply the wavelength calibration and display it
-    blue_onedspec.apply_wavelength_calibration(wave_start=3300,
+    blue_onedspec.apply_wavelength_calibration(wave_start=3350,
                                                wave_end=6000,
-                                               wave_bin=1,
+                                               wave_bin=2,
                                                stype='science+standard')
 
     blue_onedspec.load_standard(standard_name)
@@ -473,7 +471,6 @@ flux_combined = np.concatenate(
 wave_combined = np.concatenate(
     (wave_blue[wave_blue < blue_limit], wave_red[wave_red >= blue_limit]))
 
-
 plt.figure(1, figsize=(16, 8))
 plt.clf()
 plt.plot(wave_blue, flux_blue, color='blue', label='Blue arm (ASPIRED)')
@@ -488,46 +485,3 @@ plt.grid()
 plt.tight_layout()
 plt.title(science_name)
 plt.show()
-
-'''
-science_red
-science_flat
-
-fringe_count = science_flat.spectrum_list[0].count
-
-fringe_continuum = lowess(fringe_count,
-                          np.arange(len(fringe_count)),
-                          frac=0.04,
-                          return_sorted=False)
-fringe_normalised = fringe_count / fringe_continuum
-
-red_count = science_red.spectrum_list[0].count
-red_continuum = lowess(red_count,
-                       np.arange(len(red_count)),
-                       frac=0.04,
-                       return_sorted=False)
-red_normalised = red_count / red_continuum
-#sed_correction = fringe_continuum / red_continuum
-#sed_correction /= np.nanmean(sed_correction)
-
-
-def match_fringe_amplitude(factor, red_normalised, fringe_normalised):
-    diff = red_normalised[700:1800] - fringe_normalised[700:1800] * factor
-    return np.nanstd(diff)
-
-
-factor = minimize(match_fringe_amplitude,
-                  1.0,
-                  args=(red_normalised, fringe_normalised)).x
-
-fringe_correction =\
-    fringe_normalised / factor * red_continuum
-
-# Apply the flat correction
-count_defringed = science_red.spectrum_list[0].count / fringe_correction
-
-figure(1)
-clf()
-plot(science_red.spectrum_list[0].count)
-plot(count_defringed)
-'''
