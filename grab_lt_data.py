@@ -293,11 +293,10 @@ while 1:
                         # Save the downloaded file
                         try:
 
-                            with urllib.request.urlopen(
-                                    download_path) as response, open(
+                            with requests.get(download_path, auth=(username[nth_prop], password[nth_prop])) as response, open(
                                         storage_path, 'wb') as out_file:
 
-                                data = response.read()  # a `bytes` object
+                                data = response.content  # a `bytes` object
                                 out_file.write(data)
 
                             logging.info(row['filename'] +
@@ -384,9 +383,9 @@ while 1:
                 # do nothing
                 pass
 
-            # sleep for 5 minutes
-            logging.info('Sleeping for 5 minutes.')
-            time.sleep(5 * 60)
+        # sleep for 5 minutes
+        logging.info('Sleeping for 5 minutes.')
+        time.sleep(5 * 60)
 
     else:
 

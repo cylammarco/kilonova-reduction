@@ -134,3 +134,6 @@ dmypy.json
 
 # nohup log
 nohup*
+
+# temp data
+*.swp

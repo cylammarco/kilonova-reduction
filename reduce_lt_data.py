@@ -170,7 +170,7 @@ while 1:
                                                     light_name + '_aptrace'),
                               save_iframe=True)
 
-            twodspec.ap_extract(apwidth=7,
+            twodspec.ap_extract(apwidth=9,
                                 skywidth=5,
                                 skysep=3,
                                 skydeg=1,
@@ -217,7 +217,7 @@ while 1:
             onedspec.do_hough_transform()
 
             # Solve for the pixel-to-wavelength solution
-            onedspec.fit(max_tries=500, stype='science', display=False)
+            onedspec.fit(max_tries=2000, stype='science', display=False)
 
             # Apply the wavelength calibration and display it
             onedspec.apply_wavelength_calibration(stype='science')
